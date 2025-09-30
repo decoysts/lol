@@ -37,7 +37,45 @@ if (isset($_POST['logout'])) {
 
 // Проверка авторизации
 if (!isset($_SESSION['loggedin'])) {
-    include 'login.php';
+    ?>
+    <!DOCTYPE html>
+    <html lang="ru">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Авторизация</title>
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+        <style>
+            .login-card { max-width: 400px; margin: 0 auto; margin-top: 100px; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="card login-card">
+                <div class="card-header bg-primary text-white">
+                    <h2 class="mb-0">Вход</h2>
+                </div>
+                <div class="card-body">
+                    <?php if (isset($error)) echo "<div class='alert alert-danger'>$error</div>"; ?>
+                    <form method="post">
+                        <div class="mb-3">
+                            <label for="username" class="form-label">Имя пользователя</label>
+                            <input type="text" class="form-control" name="username" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="password" class="form-label">Пароль</label>
+                            <input type="password" class="form-control" name="password" required>
+                        </div>
+                        <button type="submit" name="login" class="btn btn-primary">Войти</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+        <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+    </body>
+    </html>
+    <?php
+    $conn->close();
     exit();
 }
 
@@ -102,10 +140,6 @@ $result = $conn->query("SELECT * FROM employees ORDER BY id");
         .btn-group-sm > .btn {
             padding: 0.25rem 0.5rem;
         }
-        .login-card {
-            max-width: 400px;
-            margin: 0 auto;
-        }
     </style>
 </head>
 <body>
@@ -123,23 +157,23 @@ $result = $conn->query("SELECT * FROM employees ORDER BY id");
                         <!-- Форма добавления -->
                         <h2>Добавление сотрудника</h2>
                         <form method="post" class="row g-3">
-                            <div class="col-md-4">
+                            <div class="col-md-3">
                                 <label for="lastname" class="form-label">Фамилия</label>
                                 <input type="text" class="form-control" name="lastname" required>
                             </div>
-                            <div class="col-md-4">
+                            <div class="col-md-3">
                                 <label for="firstname" class="form-label">Имя</label>
                                 <input type="text" class="form-control" name="firstname" required>
                             </div>
-                            <div class="col-md-4">
+                            <div class="col-md-3">
                                 <label for="middlename" class="form-label">Отчество</label>
                                 <input type="text" class="form-control" name="middlename" required>
                             </div>
-                            <div class="col-md-4">
+                            <div class="col-md-3">
                                 <label for="department" class="form-label">Отдел</label>
                                 <input type="text" class="form-control" name="department" required>
                             </div>
-                            <div class="col-md-4">
+                            <div class="col-md-3">
                                 <label for="salary" class="form-label">Зарплата</label>
                                 <input type="number" class="form-control" name="salary" required min="0">
                             </div>
@@ -170,7 +204,7 @@ $result = $conn->query("SELECT * FROM employees ORDER BY id");
                                     $salaryAfterTax = $salaryBeforeTax * (1 - $taxRate);
                                 ?>
                                     <tr>
-                                        <td><?php echo $row['id']; ?></td>
+                                        <td><?php echo htmlspecialchars($row['id']); ?></td>
                                         <td><?php echo htmlspecialchars($row['lastname']); ?></td>
                                         <td><?php echo htmlspecialchars($row['firstname']); ?></td>
                                         <td><?php echo htmlspecialchars($row['middlename']); ?></td>
@@ -209,49 +243,3 @@ $result = $conn->query("SELECT * FROM employees ORDER BY id");
 <?php
 $conn->close();
 ?>
-
-<?php
-// Файл login.php (создайте отдельный файл)
-if (isset($_POST['login'])) {
-    $username = $conn->real_escape_string($_POST['username']);
-    $password = $conn->real_escape_string($_POST['password']);
-    $sql = "SELECT * FROM users WHERE username = '$username' AND password = '$password'";
-    $result = $conn->query($sql);
-
-    if ($result->num_rows > 0) {
-        $_SESSION['loggedin'] = true;
-        $_SESSION['username'] = $username;
-        header("Location: index.php");
-        exit();
-    } else {
-        $error = "Неверное имя пользователя или пароль!";
-    }
-}
-?>
-
-<!DOCTYPE html>
-<html lang="ru">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Авторизация</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
-    <style>
-        .login-card {
-            max-width: 400px;
-            margin: 0 auto;
-            margin-top: 100px;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="card login-card">
-            <div class="card-header bg-primary text-white">
-                <h2 class="mb-0">Вход</h2>
-            </div>
-            <div class="card-body">
-                <?php if (isset($error)) echo "<div class='alert alert-danger'>$error</div>"; ?>
-                <form method="post">
-                    <div class="mb-3">
-                        <label for="
