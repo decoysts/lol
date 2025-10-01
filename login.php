@@ -1,60 +1,89 @@
 <?php
+// Запускаем сессию для хранения данных пользователя, таких как статус авторизации
 session_start();
 
-// Подключение к базе данных
+// Определяем переменные для подключения к базе данных
+// $host - хост базы данных, обычно "localhost" для локального сервера
 $host = "localhost";
+// $user - имя пользователя базы данных, по умолчанию "root" для разработки
 $user = "root";
+// $password - пароль пользователя базы данных, пустой для локальной разработки (не рекомендуется в продакшене)
 $password = "";
+// $database - имя базы данных, в данном случае "test"
 $database = "test";
 
+// Создаем новое соединение с MySQL/MariaDB с использованием предоставленных параметров
 $conn = new mysqli($host, $user, $password, $database);
 
+// Проверяем, есть ли ошибка подключения
 if ($conn->connect_error) {
+    // Если ошибка, выводим сообщение и прекращаем выполнение скрипта
     die("Ошибка подключения: " . $conn->connect_error);
 }
 
-// Обработка регистрации
+// Обработка формы регистрации, если была отправлена POST-запросом с name="register"
 if (isset($_POST['register'])) {
+    // Экранируем имя пользователя для предотвращения SQL-инъекций
     $username = $conn->real_escape_string($_POST['username']);
+    // Хэшируем пароль с использованием password_hash для безопасного хранения
     $password = password_hash($_POST['password'], PASSWORD_DEFAULT); // Шифрование пароля
 
+    // Формируем SQL-запрос для вставки нового пользователя в таблицу users
     $sql = "INSERT INTO users (username, password) VALUES ('$username', '$password')";
+    // Выполняем запрос и проверяем результат
     if ($conn->query($sql)) {
+        // Если успешно, устанавливаем сообщение об успехе
         $reg_success = "Регистрация успешна! Теперь войдите.";
     } else {
+        // Если ошибка, устанавливаем сообщение с текстом ошибки
         $reg_error = "Ошибка регистрации: " . $conn->error;
     }
 }
 
-// Авторизация с проверкой хешированного пароля
+// Обработка формы авторизации, если была отправлена POST-запросом с name="login"
 if (isset($_POST['login'])) {
+    // Экранируем имя пользователя для безопасности
     $username = $conn->real_escape_string($_POST['username']);
+    // Получаем пароль из формы (не хэшируем здесь, так как проверим хэш позже)
     $password = $_POST['password'];
+    // Формируем SQL-запрос для поиска пользователя по имени
     $sql = "SELECT * FROM users WHERE username = '$username'";
+    // Выполняем запрос и сохраняем результат
     $result = $conn->query($sql);
 
+    // Проверяем, найдена ли хотя бы одна запись
     if ($result->num_rows > 0) {
+        // Извлекаем строку с данными пользователя
         $user_row = $result->fetch_assoc();
+        // Проверяем, совпадает ли введенный пароль с хэшированным в БД
         if (password_verify($password, $user_row['password'])) {
+            // Если да, устанавливаем сессию для авторизации
             $_SESSION['loggedin'] = true;
+            // Сохраняем имя пользователя в сессии
             $_SESSION['username'] = $username;
         } else {
+            // Если пароль неверный, устанавливаем сообщение об ошибке
             $error = "Неверное имя пользователя или пароль!";
         }
     } else {
+        // Если пользователь не найден, устанавливаем сообщение об ошибке
         $error = "Неверное имя пользователя или пароль!";
     }
 }
 
-// Выход
+// Обработка выхода из системы, если была отправлена POST-запросом с name="logout"
 if (isset($_POST['logout'])) {
+    // Уничтожаем все данные сессии
     session_destroy();
+    // Перенаправляем на главную страницу
     header("Location: index.php");
+    // Прекращаем выполнение скрипта
     exit();
 }
 
-// Проверка авторизации
+// Проверяем, авторизован ли пользователь (есть ли ключ 'loggedin' в сессии)
 if (!isset($_SESSION['loggedin'])) {
+    // Если не авторизован, выводим HTML-форму для входа и регистрации
     ?>
     <!DOCTYPE html>
     <html lang="ru">
@@ -127,45 +156,65 @@ if (!isset($_SESSION['loggedin'])) {
     </body>
     </html>
     <?php
+    // Закрываем соединение с базой данных
     $conn->close();
+    // Прекращаем выполнение скрипта, так как пользователь не авторизован
     exit();
 }
 
-// Обработка добавления записи
+// Обработка добавления новой записи сотрудника, если была отправлена POST-запросом с name="add"
 if (isset($_POST['add'])) {
+    // Экранируем фамилию для безопасности
     $lastname = $conn->real_escape_string($_POST['lastname']);
+    // Экранируем имя
     $firstname = $conn->real_escape_string($_POST['firstname']);
+    // Экранируем отчество
     $middlename = $conn->real_escape_string($_POST['middlename']);
+    // Экранируем отдел
     $department = $conn->real_escape_string($_POST['department']);
+    // Преобразуем зарплату в целое число
     $salary = (int)$_POST['salary'];
 
+    // Формируем SQL-запрос для вставки новой записи в таблицу employees
     $sql = "INSERT INTO employees (lastname, firstname, middlename, department, salary) 
             VALUES ('$lastname', '$firstname', '$middlename', '$department', $salary)";
+    // Выполняем запрос
     $conn->query($sql);
 }
 
-// Обработка удаления записи
+// Обработка удаления записи, если была отправлена POST-запросом с name="delete"
 if (isset($_POST['delete'])) {
+    // Преобразуем ID в целое число
     $id = (int)$_POST['id'];
+    // Формируем SQL-запрос для удаления записи по ID
     $sql = "DELETE FROM employees WHERE id = $id";
+    // Выполняем запрос
     $conn->query($sql);
 }
 
-// Обработка редактирования записи
+// Обработка обновления записи, если была отправлена POST-запросом с name="update"
 if (isset($_POST['update'])) {
+    // Преобразуем ID в целое число
     $id = (int)$_POST['id'];
+    // Экранируем фамилию
     $lastname = $conn->real_escape_string($_POST['lastname']);
+    // Экранируем имя
     $firstname = $conn->real_escape_string($_POST['firstname']);
+    // Экранируем отчество
     $middlename = $conn->real_escape_string($_POST['middlename']);
+    // Экранируем отдел
     $department = $conn->real_escape_string($_POST['department']);
+    // Преобразуем зарплату в целое число
     $salary = (int)$_POST['salary'];
 
+    // Формируем SQL-запрос для обновления записи по ID
     $sql = "UPDATE employees SET lastname='$lastname', firstname='$firstname', middlename='$middlename', 
             department='$department', salary=$salary WHERE id=$id";
+    // Выполняем запрос
     $conn->query($sql);
 }
 
-// Получение данных из базы
+// Получаем все записи из таблицы employees, отсортированные по ID
 $result = $conn->query("SELECT * FROM employees ORDER BY id");
 ?>
 
@@ -248,9 +297,14 @@ $result = $conn->query("SELECT * FROM employees ORDER BY id");
                                 </tr>
                             </thead>
                             <tbody>
-                                <?php while ($row = $result->fetch_assoc()) {
+                                <?php 
+                                // Цикл по результатам запроса, извлекаем каждую строку как ассоциативный массив
+                                while ($row = $result->fetch_assoc()) {
+                                    // Рассчитываем зарплату до НДФЛ (исходная)
                                     $salaryBeforeTax = $row['salary'];
+                                    // Устанавливаем ставку НДФЛ 13%
                                     $taxRate = 0.13;
+                                    // Рассчитываем зарплату после вычета НДФЛ
                                     $salaryAfterTax = $salaryBeforeTax * (1 - $taxRate);
                                 ?>
                                     <tr>
@@ -321,5 +375,6 @@ $result = $conn->query("SELECT * FROM employees ORDER BY id");
 </html>
 
 <?php
+// Закрываем соединение с базой данных в конце скрипта
 $conn->close();
 ?>
