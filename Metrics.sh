@@ -7,10 +7,10 @@ DB_HOST="localhost"
 DB_NAME="metrics"
 
 # Путь к лог-файлу
-LOG_FILE="/scripts/metrics.log"
+LOG_FILE="metrics.log"
 
 # Установка значения hdddisk
-hdddisk="/dev/sdb1"  # Измените на нужный диск
+hdddisk="/dev/mapper/centos-root"  # Измените на нужный диск
 
 # Получение даты и времени
 date=$(date +"%H:%M:%S")
@@ -23,9 +23,10 @@ if [ -z "$ram" ]; then ram="0"; fi
 hdd=$(df -h | grep "$hdddisk" | awk '{print $4}' | sed 's/[^0-9.]*//g' | sed 's/G//')
 if [ -z "$hdd" ]; then hdd="0"; fi
 
-# Проверка использования CPU
-freecpu=$(top -bn1 | grep "Cpu(s)" | awk '{print $8}' | sed 's/[^0-9.]*//g')
-cpu=$((100 - ${freecpu:-0}))
+# Проверка использования CPU (исправленная версия)
+freecpu=$(top -bn1 | grep "Cpu(s)" | awk '{print $8}' | sed 's/[^0-9.]*//g' | awk '{print ($1 > 0) ? $1 : 0}')
+if [ -z "$freecpu" ]; then freecpu="0"; fi
+cpu=$(echo "scale=2; 100 - $freecpu" | bc)
 
 # Определение статуса
 ramStatus=""
@@ -34,7 +35,7 @@ cpuStatus=""
 
 if [ $(echo "$ram < 1" | bc -l) -eq 1 ]; then ramStatus="low memory"; fi
 if [ $(echo "$hdd < 1" | bc -l) -eq 1 ]; then hddStatus="low hdd"; fi
-if [ $cpu -gt 89 ]; then cpuStatus="high CPU"; fi
+if [ $(echo "$cpu > 89" | bc -l) -eq 1 ]; then cpuStatus="high CPU"; fi
 
 status="${ramStatus}${hddStatus:+ $hddStatus}${cpuStatus:+ $cpuStatus}"
 if [ -z "$status" ]; then status="OK"; fi
