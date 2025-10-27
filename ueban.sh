@@ -3,38 +3,21 @@
 echo "--- [1/5] Переходим в папку проекта ---"
 cd ~/my-full-stack
 
-# Убедимся, что WordPress установлен. ЕСЛИ ТЫ ЭТОГО НЕ СДЕЛАЛ, СДЕЛАЙ СЕЙЧАС.
-echo "!!! ВНИМАНИЕ !!!"
-echo "Убедись, что ты зашел на http://192.168.10.138 и ЗАВЕРШИЛ установку WordPress."
-echo "Если нет, сделай это, пока скрипт работает. Нажми ENTER."
-read
+echo "--- [2/5] Останавливаем все, что запущено (новой командой) ---"
+# 'docker compose' (без дефиса)
+sudo docker compose down -v
+# 'docker-compose' (с дефисом), на всякий случай
+sudo docker-compose down -v
 
-echo "--- [2/5] Останавливаем все и чистим старый том Grafana ---"
-sudo docker-compose down
-sudo docker volume rm -f my-full-stack_grafana_data
+echo "--- [3/5] Возвращаем простой docker-compose.yml (БЕЗ СБОРКИ) ---"
+# Он снова будет использовать 'image: grafana...'
+# Мы также добавим healthcheck, чтобы Grafana ждала базу
 
-echo "--- [3/5] Чиним DNS и интернет для Docker (перезапуск служб) ---"
-sudo systemctl restart firewalld
-sudo systemctl restart docker
-# Ждем, пока Docker проснется
-sleep 10
+# Получаем пароли из старого файла, чтобы не генерить новые
+MYSQL_ROOT_PASS=$(grep 'MYSQL_ROOT_PASSWORD' docker-compose.yml | head -n 1 | cut -d\' -f2)
+WP_DB_PASS=$(grep 'WORDPRESS_DB_PASSWORD' docker-compose.yml | head -n 1 | cut -d\' -f2)
+GRAFANA_ADMIN_PASS=$(grep 'GF_SECURITY_ADMIN_PASSWORD' docker-compose.yml | head -n 1 | cut -d\' -f2)
 
-echo "--- [4/5] Создаем Dockerfile.grafana (чтобы встроить конфиги) ---"
-cat << EOF > Dockerfile.grafana
-# Используем базовый образ
-FROM grafana/grafana-oss:latest
-# Копируем наши конфиги ПРЯМО ВНУТРЬ образа, обходя SELinux
-COPY ./provisioning /etc/grafana/provisioning
-EOF
-
-# Генерируем пароли заново (на всякий случай, если они потерялись)
-MYSQL_ROOT_PASS=qazwsx6
-WP_DB_PASS=qazwsx6
-GRAFANA_ADMIN_PASS=qazwsx6
-IP_ADDR=$(hostname -I | awk '{print $1}')
-
-echo "--- [5/5] Перезаписываем docker-compose.yml, чтобы он собирал новый образ ---"
-# Этот compose-файл отличается от старого в секции 'grafana'
 cat << EOF > docker-compose.yml
 version: '3.8'
 
@@ -52,12 +35,19 @@ services:
       MYSQL_PASSWORD: '$WP_DB_PASS'
     networks:
       - app_network
+    # Проверка, что база данных готова принимать подключения
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p$MYSQL_ROOT_PASS"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   wordpress:
     image: wordpress:latest
     container_name: wordpress_app
     depends_on:
-      - db
+      db:
+        condition: service_healthy # Ждем, пока 'db' будет 'healthy'
     ports:
       - "80:80"
     restart: always
@@ -75,7 +65,8 @@ services:
     image: phpmyadmin:latest
     container_name: phpmyadmin_app
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     ports:
       - "8081:80"
     restart: always
@@ -85,12 +76,8 @@ services:
     networks:
       - app_network
 
-  # --- ВОТ ИЗМЕНЕНИЯ ---
   grafana:
-    # Вместо 'image:', мы используем 'build:'
-    build:
-      context: .
-      dockerfile: Dockerfile.grafana
+    image: grafana/grafana-oss:latest
     container_name: grafana_app
     ports:
       - "3000:3000"
@@ -98,11 +85,15 @@ services:
     environment:
       GF_SECURITY_ADMIN_PASSWORD: '$GRAFANA_ADMIN_PASS'
     volumes:
-      # Мы убрали монтирование папки provisioning
-      # Теперь используется только том для данных
+      # Возвращаем старый способ монтирования
       - grafana_data:/var/lib/grafana
+      - ./provisioning/datasources:/etc/grafana/provisioning/datasources
+      - ./provisioning/dashboards:/etc/grafana/provisioning/dashboards
     networks:
       - app_network
+    depends_on:
+      db:
+        condition: service_healthy # Grafana тоже ждет базу
 
 networks:
   app_network:
@@ -114,21 +105,25 @@ volumes:
   grafana_data:
 EOF
 
-echo "--- ЗАПУСК! ---"
-echo "Собираем новый образ Grafana и запускаем все. Это займет ~1 минуту..."
-# --build заставит его собрать новый образ grafana
-sudo docker-compose up -d --build
+echo "--- [4/5] ГЛАВНЫЙ ФИКС: Применяем метки SELinux к папке provisioning ---"
+# Эта команда 'говорит' SELinux, что файлы в этой папке можно читать контейнерам
+sudo chcon -Rt svirt_sandbox_file_t $PROJECT_DIR/provisioning
 
-echo "Ждем 45 секунд, пока все запустится..."
+echo "--- [5/5] Запускаем все (старой командой docker-compose С ДЕФИСОМ) ---"
+# Она проще и не требует buildx
+sudo docker-compose up -d
+
+echo "--- Ждем 45 секунд... ---"
 sleep 45
 
-echo "--- СМОТРИМ НОВЫЙ ЛОГ ---"
-# Теперь в логе не должно быть ошибок 127.0.0.1
+echo "--- СМОТРИМ ЛОГ GRAFANA ---"
 sudo docker-compose logs grafana
 
+IP_ADDR=$(hostname -I | awk '{print $1}')
 echo "================================================="
-echo "✅ ВСЕ! Теперь должно работать."
-echo "Проверь Grafana: http://$IP_ADDR:3000"
+echo "✅ Проверяй. Теперь конфиг должен был прочитаться."
+echo "Grafana: http://$IP_ADDR:3000"
 echo "Логин: admin / Пароль: $GRAFANA_ADMIN_PASS"
-echo "(Если дашборд пустой, убедись, что ты завершил установку WordPress)"
+echo ""
+echo "!!! НЕ ЗАБУДЬ СНАЧАЛА ЗАЙТИ НА http://$IP_ADDR И ЗАВЕРШИТЬ УСТАНОВКУ WORDPRESS !!!"
 echo "================================================="
