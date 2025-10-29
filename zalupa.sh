@@ -2,11 +2,12 @@
 
 # --- МЕГА-АВТОМАТИЗИРОВАННЫЙ СКРИПТ ДЛЯ СТЕКА WORDPRESS + GRAFANA ---
 # Автор: Grok (на основе анализа и улучшений)
-# Версия: 1.1 (2025-10-29)
+# Версия: 1.2 (2025-10-29)
 # Описание: Полностью автоматизирует установку стека с WordPress, MariaDB, phpMyAdmin, Grafana.
 #           Автоматически настраивает WP, генерирует пароли, проверяет готовность, улучшает дашборд.
 #           Исправлена проблема с подключением Grafana к DB: добавлен полный URL с протоколом 'mysql://db:3306'.
 #           Добавлены проверки и опциональная установка Docker/Compose, если не найдены (с подтверждением).
+#           Исправлены here-documents: теперь с 'EOF' для literal содержимого, чтобы избежать warning'ов.
 #           Только для теста! Не для продакшена.
 
 # --- ФУНКЦИИ ПОМОЩНИКИ ---
@@ -263,12 +264,17 @@ volumes:
   wp_files:
   grafana_data:
 EOF
+
+# Проверка файла
+if [ ! -s docker-compose.yml ]; then
+    error "docker-compose.yml не создан или пустой! Проверьте here-document."
+fi
 success "docker-compose.yml создан."
 
 # --- [6/11] СОЗДАНИЕ ПРОВИЖЕНИНГА GRAFANA ---
 info "[6/11] Создание provisioning для Grafana (с исправленным URL для MySQL)..."
 
-# Datasource с исправлением: полный URL с 'mysql://' и дополнительными полями из docs
+# Datasource: без кавычек на EOF, т.к. есть переменная $WP_DB_PASS
 cat << EOF > provisioning/datasources/datasource.yml
 apiVersion: 1
 
@@ -290,8 +296,12 @@ datasources:
       tlsSkipVerify: true  # Для теста, без TLS
 EOF
 
-# Providers
-cat << EOF > provisioning/dashboards/dashboard.yml
+if [ ! -s provisioning/datasources/datasource.yml ]; then
+    error "datasource.yml не создан или пустой!"
+fi
+
+# Providers: с 'EOF' для literal
+cat << 'EOF' > provisioning/dashboards/dashboard.yml
 apiVersion: 1
 
 providers:
@@ -306,8 +316,12 @@ providers:
       path: /etc/grafana/provisioning/dashboards
 EOF
 
-# Улучшенный дашборд: добавлены time-series графики
-cat << EOF > provisioning/dashboards/wp-stats-dashboard.json
+if [ ! -s provisioning/dashboards/dashboard.yml ]; then
+    error "dashboard.yml не создан или пустой!"
+fi
+
+# Дашборд JSON: с 'EOF' для literal (нет переменных)
+cat << 'EOF' > provisioning/dashboards/wp-stats-dashboard.json
 {
   "__inputs": [],
   "__requires": [],
@@ -386,4 +400,61 @@ cat << EOF > provisioning/dashboards/wp-stats-dashboard.json
   "timezone": "browser",
   "title": "Advanced WordPress Stats",
   "uid": "wp-stats-dashboard",
-  "
+  "version": 2
+}
+EOF
+
+if [ ! -s provisioning/dashboards/wp-stats-dashboard.json ]; then
+    error "wp-stats-dashboard.json не создан или пустой! Проверьте here-document в скрипте."
+fi
+success "Provisioning Grafana создан (с исправленным подключением к DB)."
+
+# --- [7/11] ФИКС SELINUX ---
+info "[7/11] Обработка SELinux..."
+sudo restorecon -R $PROJECT_DIR
+sudo chcon -Rt svirt_sandbox_file_t $PROJECT_DIR &>/dev/null  # На всякий
+success "SELinux настроен."
+
+# --- [8/11] ЗАПУСК КОНТЕЙНЕРОВ ---
+info "[8/11] Запуск docker compose up -d..."
+sudo docker compose up -d || error "Ошибка запуска."
+wait_for_container wordpress_db
+
+# --- [9/11] АВТОМАТИЗАЦИЯ УСТАНОВКИ WORDPRESS ---
+info "[9/11] Автоматическая установка WordPress через wp-cli..."
+sudo docker exec -i wordpress_app wp core install \
+    --url="$WP_URL" \
+    --title="$WP_TITLE" \
+    --admin_user="$WP_ADMIN_USER" \
+    --admin_password="$WP_ADMIN_PASS" \
+    --admin_email="$WP_ADMIN_EMAIL" \
+    --skip-email || error "Ошибка установки WP."
+success "WordPress установлен автоматически!"
+
+# --- [10/11] ПРОВЕРКА GRAFANA ---
+wait_for_container grafana_app
+info "[10/11] Просмотр логов Grafana на ошибки (проверьте подключение к DB)..."
+sudo docker compose logs grafana | tail -n 50 | grep -i "datasource\|mysql\|error"
+
+# --- [11/11] ВЫВОД РЕЗУЛЬТАТОВ ---
+IP_ADDR=$(hostname -I | awk '{print $1}')
+success "[11/11] Установка завершена!"
+
+echo "==================================================================="
+echo "✅ СТЕК ГОТОВ В $PROJECT_DIR"
+echo "==================================================================="
+echo "🌍 WordPress: http://$IP_ADDR:$WP_PORT"
+echo "   Admin: $WP_ADMIN_USER / $WP_ADMIN_PASS"
+echo ""
+echo "🗃️ phpMyAdmin: http://$IP_ADDR:$PMA_PORT"
+echo "   Root: root / $MYSQL_ROOT_PASS"
+echo "   WP User: wp_user / $WP_DB_PASS"
+echo ""
+echo "📊 Grafana: http://$IP_ADDR:$GRAFANA_PORT"
+echo "   Admin: admin / $GRAFANA_ADMIN_PASS"
+echo "   Дашборд: 'Advanced WordPress Stats' (с графиками и статами)"
+echo "   (Если проблема с подключением persists, проверьте логи Grafana на ошибки)"
+echo ""
+echo "Логи: /var/log/my-stack-setup.log"
+echo "Для очистки: sudo docker compose -f $PROJECT_DIR/docker-compose.yml down -v"
+echo "==================================================================="
