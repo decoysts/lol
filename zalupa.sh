@@ -1,22 +1,3 @@
-Полный идеальный скрипт
-На основе всех наших диалогов, я переписал скрипт до идеала. Учёл все проблемы:
-	•	Надёжная генерация паролей (с fallback на date+sha256, если urandom медленно в VM).
-	•	Убрал version в docker-compose.yml (чтобы избежать obsolete warning).
-	•	Убрал кавычки в environment (для правильной подстановки переменных).
-	•	Добавил проверки на пустоту паролей и debug-вывод.
-	•	Исправил подключение Grafana к DB (url: mysql://db:3306, access: proxy).
-	•	Добавил инструкцию по docker login перед запуском (для avoidance unauthorized errors).
-	•	Улучшил healthchecks, SELinux (restorecon + chcon).
-	•	Автоматизация WP через wp-cli.
-	•	Проверки файлов после создания.
-	•	Цветной вывод, логирование, обработка ошибок.
-	•	Опциональная установка Docker/Compose с подтверждением.
-	•	Ждём готовности контейнеров.
-Важно перед запуском:
-	•	Залогиньтесь в Docker: sudo docker login (используйте аккаунт Docker Hub, чтобы избежать “unauthorized: authentication required” при pulling образов).
-	•	Если в VirtualBox — установите haveged для лучшей энтропии: sudo yum install haveged && sudo systemctl start haveged.
-	•	Запускайте как sudo bash script.sh (не sh, чтобы избежать проблем с интерпретатором).
-Вот полный скрипт (сохраните как setup.sh и сделайте исполняемым: chmod +x setup.sh).
 #!/bin/bash
 
 # --- МЕГА-АВТОМАТИЗИРОВАННЫЙ СКРИПТ ДЛЯ СТЕКА WORDPRESS + GRAFANA ---
@@ -448,13 +429,34 @@ wait_for_container wordpress_db
 
 # --- [9/11] АВТОМАТИЗАЦИЯ УСТАНОВКИ WORDPRESS ---
 info "[9/11] Автоматическая установка WordPress через wp-cli..."
-sudo docker exec -i wordpress_app wp core install \
-    --url="$WP_URL" \
-    --title="$WP_TITLE" \
-    --admin_user="$WP_ADMIN_USER" \
-    --admin_password="$WP_ADMIN_PASS" \
-    --admin_email="$WP_ADMIN_EMAIL" \
-    --skip-email || error "Ошибка установки WP (проверьте логи db и wordpress)."
+
+# Определяем имя проекта (оно же имя папки) для корректных имен сети и тома
+# (Docker Compose добавляет имя папки как префикс)
+PROJECT_NAME=$(basename $PROJECT_DIR)
+WP_NETWORK="${PROJECT_NAME}_app_network"
+WP_VOLUME="${PROJECT_NAME}_wp_files"
+
+info "Используем 'wordpress:cli' для установки в сети $WP_NETWORK и томе $WP_VOLUME..."
+
+# Запускаем 'wp core install' в отдельном 'wordpress:cli' контейнере
+# Он подключится к той же сети (чтобы видеть 'db') и тому (чтобы видеть файлы WP),
+# что и основной 'wordpress_app'
+sudo docker run --rm -i \
+    --network="$WP_NETWORK" \
+    -v "$WP_VOLUME:/var/www/html" \
+    -e WORDPRESS_DB_HOST=db:3306 \
+    -e WORDPRESS_DB_USER=wp_user \
+    -e WORDPRESS_DB_PASSWORD="$WP_DB_PASS" \
+    -e WORDPRESS_DB_NAME=wordpress \
+    wordpress:cli \
+    wp core install \
+        --url="$WP_URL" \
+        --title="$WP_TITLE" \
+        --admin_user="$WP_ADMIN_USER" \
+        --admin_password="$WP_ADMIN_PASS" \
+        --admin_email="$WP_ADMIN_EMAIL" \
+        --skip-email || error "Ошибка установки WP (проверьте, что образ 'wordpress:cli' скачан и сеть $WP_NETWORK верна)."
+
 success "WordPress установлен автоматически!"
 
 # --- [10/11] ПРОВЕРКА GRAFANA ---
