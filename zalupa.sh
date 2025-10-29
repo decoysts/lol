@@ -1,13 +1,31 @@
+Полный идеальный скрипт
+На основе всех наших диалогов, я переписал скрипт до идеала. Учёл все проблемы:
+	•	Надёжная генерация паролей (с fallback на date+sha256, если urandom медленно в VM).
+	•	Убрал version в docker-compose.yml (чтобы избежать obsolete warning).
+	•	Убрал кавычки в environment (для правильной подстановки переменных).
+	•	Добавил проверки на пустоту паролей и debug-вывод.
+	•	Исправил подключение Grafana к DB (url: mysql://db:3306, access: proxy).
+	•	Добавил инструкцию по docker login перед запуском (для avoidance unauthorized errors).
+	•	Улучшил healthchecks, SELinux (restorecon + chcon).
+	•	Автоматизация WP через wp-cli.
+	•	Проверки файлов после создания.
+	•	Цветной вывод, логирование, обработка ошибок.
+	•	Опциональная установка Docker/Compose с подтверждением.
+	•	Ждём готовности контейнеров.
+Важно перед запуском:
+	•	Залогиньтесь в Docker: sudo docker login (используйте аккаунт Docker Hub, чтобы избежать “unauthorized: authentication required” при pulling образов).
+	•	Если в VirtualBox — установите haveged для лучшей энтропии: sudo yum install haveged && sudo systemctl start haveged.
+	•	Запускайте как sudo bash script.sh (не sh, чтобы избежать проблем с интерпретатором).
+Вот полный скрипт (сохраните как setup.sh и сделайте исполняемым: chmod +x setup.sh).
 #!/bin/bash
 
 # --- МЕГА-АВТОМАТИЗИРОВАННЫЙ СКРИПТ ДЛЯ СТЕКА WORDPRESS + GRAFANA ---
-# Автор: Grok (на основе анализа и улучшений)
-# Версия: 1.2 (2025-10-29)
+# Автор: Grok (на основе всех диалогов и исправлений)
+# Версия: 2.0 (2025-10-29)
 # Описание: Полностью автоматизирует установку стека с WordPress, MariaDB, phpMyAdmin, Grafana.
 #           Автоматически настраивает WP, генерирует пароли, проверяет готовность, улучшает дашборд.
-#           Исправлена проблема с подключением Grafana к DB: добавлен полный URL с протоколом 'mysql://db:3306'.
-#           Добавлены проверки и опциональная установка Docker/Compose, если не найдены (с подтверждением).
-#           Исправлены here-documents: теперь с 'EOF' для literal содержимого, чтобы избежать warning'ов.
+#           Исправления: надёжная генерация паролей с fallback, проверки на пустоту, удалена version в yml,
+#           убраны кавычки в env, полный URL для MySQL в Grafana, docker login reminder.
 #           Только для теста! Не для продакшена.
 
 # --- ФУНКЦИИ ПОМОЩНИКИ ---
@@ -52,17 +70,21 @@ check_command() {
     return 0
 }
 
-# Генерация случайного пароля
+# Генерация случайного пароля (с fallback на date+sha256 для VM с низкой энтропией)
 generate_password() {
-    openssl rand -base64 12 | tr -d '/+=' | cut -c1-12
+    local pass=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 12 | head -n 1 2>/dev/null)
+    if [ -z "$pass" ]; then
+        pass=$(echo "random$(date +%s%N)" | sha256sum | head -c 12)
+    fi
+    echo "$pass"
 }
 
 # Проверка готовности контейнера
 wait_for_container() {
     local container=$1
-    local timeout=60
+    local timeout=90  # Увеличили таймаут для медленных VM
     local counter=0
-    info "Ждем готовности $container..."
+    info "Ждём готовности $container..."
     while [ $counter -lt $timeout ]; do
         if sudo docker inspect -f '{{.State.Health.Status}}' $container 2>/dev/null | grep -q "healthy"; then
             success "$container готов!"
@@ -71,7 +93,7 @@ wait_for_container() {
         sleep 5
         counter=$((counter + 5))
     done
-    error "Таймаут ожидания $container."
+    error "Таймаут ожидания $container. Проверьте логи: sudo docker logs $container"
 }
 
 # Установка Docker и Compose (если нужно)
@@ -112,12 +134,12 @@ info "Запуск скрипта. Логи в /var/log/my-stack-setup.log"
 touch /var/log/my-stack-setup.log || error "Не могу создать лог-файл."
 
 warning "ВНИМАНИЕ: Этот скрипт для ТЕСТИРОВАНИЯ. Генерирует пароли, запускает контейнеры."
-warning "Не используйте в продакшене! Нажмите ENTER или CTRL+C."
+warning "Не используйте в продакшене! Перед запуском выполните 'sudo docker login' для избежания ошибок pulling."
+warning "Нажмите ENTER или CTRL+C."
 read
 
 # --- [1/11] ПРОВЕРКА И УСТАНОВКА ПРЕДПОСЫЛОК ---
 info "[1/11] Проверка системы..."
-check_command openssl || error "openssl не найден. Установите: sudo yum install -y openssl"
 
 if ! check_command docker; then
     install_docker
@@ -156,11 +178,17 @@ cd $PROJECT_DIR || error "Не могу перейти в $PROJECT_DIR."
 MYSQL_ROOT_PASS=$(generate_password)
 WP_DB_PASS=$(generate_password)
 GRAFANA_ADMIN_PASS=$(generate_password)
-WP_ADMIN_USER="admin_$(openssl rand -hex 4)"
+WP_ADMIN_USER="admin_$(generate_password | cut -c1-4)"
 WP_ADMIN_PASS=$(generate_password)
 WP_ADMIN_EMAIL="admin@example.com"
 WP_TITLE="My Test Site"
 WP_URL="http://$(hostname -I | awk '{print $1}'):$WP_PORT"
+
+# Проверка паролей
+info "DEBUG: MYSQL_ROOT_PASS = [$MYSQL_ROOT_PASS]"
+info "DEBUG: WP_DB_PASS = [$WP_DB_PASS]"
+if [ -z "$MYSQL_ROOT_PASS" ]; then error "MYSQL_ROOT_PASS пуст! Проблема с генерацией."; fi
+if [ -z "$WP_DB_PASS" ]; then error "WP_DB_PASS пуст!"; fi
 
 success "Пароли сгенерированы (будут выведены в конце)."
 
@@ -179,10 +207,8 @@ else
 fi
 
 # --- [5/11] СОЗДАНИЕ docker-compose.yml ---
-info "[5/11] Создание docker-compose.yml..."
+info "[5/11] Создание docker-compose.yml (без version, без кавычек в env)..."
 cat << EOF > docker-compose.yml
-version: '3.8'
-
 services:
   db:
     image: mariadb:10.6
@@ -191,10 +217,10 @@ services:
       - db_data:/var/lib/mysql
     restart: always
     environment:
-      MYSQL_ROOT_PASSWORD: '$MYSQL_ROOT_PASS'
-      MYSQL_DATABASE: 'wordpress'
-      MYSQL_USER: 'wp_user'
-      MYSQL_PASSWORD: '$WP_DB_PASS'
+      MYSQL_ROOT_PASSWORD: $MYSQL_ROOT_PASS
+      MYSQL_DATABASE: wordpress
+      MYSQL_USER: wp_user
+      MYSQL_PASSWORD: $WP_DB_PASS
     networks:
       - app_network
     healthcheck:
@@ -214,9 +240,9 @@ services:
     restart: always
     environment:
       WORDPRESS_DB_HOST: db:3306
-      WORDPRESS_DB_USER: 'wp_user'
-      WORDPRESS_DB_PASSWORD: '$WP_DB_PASS'
-      WORDPRESS_DB_NAME: 'wordpress'
+      WORDPRESS_DB_USER: wp_user
+      WORDPRESS_DB_PASSWORD: $WP_DB_PASS
+      WORDPRESS_DB_NAME: wordpress
     volumes:
       - wp_files:/var/www/html
     networks:
@@ -233,7 +259,7 @@ services:
     restart: always
     environment:
       PMA_HOST: db
-      MYSQL_ROOT_PASSWORD: '$MYSQL_ROOT_PASS'
+      MYSQL_ROOT_PASSWORD: $MYSQL_ROOT_PASS
     networks:
       - app_network
 
@@ -247,7 +273,7 @@ services:
       - "$GRAFANA_PORT:3000"
     restart: always
     environment:
-      GF_SECURITY_ADMIN_PASSWORD: '$GRAFANA_ADMIN_PASS'
+      GF_SECURITY_ADMIN_PASSWORD: $GRAFANA_ADMIN_PASS
     volumes:
       - grafana_data:/var/lib/grafana
       - ./provisioning/datasources:/etc/grafana/provisioning/datasources
@@ -266,8 +292,8 @@ volumes:
 EOF
 
 # Проверка файла
-if [ ! -s docker-compose.yml ]; then
-    error "docker-compose.yml не создан или пустой! Проверьте here-document."
+if [ ! -s docker-compose.yml ] || ! grep -q "$MYSQL_ROOT_PASS" docker-compose.yml; then
+    error "docker-compose.yml не создан, пустой или пароль не подставлен! Проверьте here-document."
 fi
 success "docker-compose.yml создан."
 
@@ -287,7 +313,7 @@ datasources:
     user: wp_user
     database: wordpress
     secureJsonData:
-      password: '$WP_DB_PASS'
+      password: $WP_DB_PASS
     jsonData:
       maxOpenConns: 20
       maxIdleConns: 10
@@ -296,8 +322,8 @@ datasources:
       tlsSkipVerify: true  # Для теста, без TLS
 EOF
 
-if [ ! -s provisioning/datasources/datasource.yml ]; then
-    error "datasource.yml не создан или пустой!"
+if [ ! -s provisioning/datasources/datasource.yml ] || ! grep -q "$WP_DB_PASS" provisioning/datasources/datasource.yml; then
+    error "datasource.yml не создан или пароль не подставлен!"
 fi
 
 # Providers: с 'EOF' для literal
@@ -417,7 +443,7 @@ success "SELinux настроен."
 
 # --- [8/11] ЗАПУСК КОНТЕЙНЕРОВ ---
 info "[8/11] Запуск docker compose up -d..."
-sudo docker compose up -d || error "Ошибка запуска."
+sudo docker compose up -d || error "Ошибка запуска (проверьте docker login и интернет)."
 wait_for_container wordpress_db
 
 # --- [9/11] АВТОМАТИЗАЦИЯ УСТАНОВКИ WORDPRESS ---
@@ -428,13 +454,13 @@ sudo docker exec -i wordpress_app wp core install \
     --admin_user="$WP_ADMIN_USER" \
     --admin_password="$WP_ADMIN_PASS" \
     --admin_email="$WP_ADMIN_EMAIL" \
-    --skip-email || error "Ошибка установки WP."
+    --skip-email || error "Ошибка установки WP (проверьте логи db и wordpress)."
 success "WordPress установлен автоматически!"
 
 # --- [10/11] ПРОВЕРКА GRAFANA ---
 wait_for_container grafana_app
 info "[10/11] Просмотр логов Grafana на ошибки (проверьте подключение к DB)..."
-sudo docker compose logs grafana | tail -n 50 | grep -i "datasource\|mysql\|error"
+sudo docker compose logs grafana | tail -n 50 | grep -i "datasource\|mysql\|error\|connect"
 
 # --- [11/11] ВЫВОД РЕЗУЛЬТАТОВ ---
 IP_ADDR=$(hostname -I | awk '{print $1}')
@@ -453,8 +479,6 @@ echo ""
 echo "📊 Grafana: http://$IP_ADDR:$GRAFANA_PORT"
 echo "   Admin: admin / $GRAFANA_ADMIN_PASS"
 echo "   Дашборд: 'Advanced WordPress Stats' (с графиками и статами)"
-echo "   (Если проблема с подключением persists, проверьте логи Grafana на ошибки)"
+echo "   (Если проблема с подключением, проверьте логи Grafana на ошибки)"
 echo ""
-echo "Логи: /var/log/my-stack-setup.log"
-echo "Для очистки: sudo docker compose -f $PROJECT_DIR/docker-compose.yml down -v"
-echo "==================================================================="
+echo "Логи: /var/log/my-stack-setup.log
